@@ -1,4 +1,4 @@
-# AWS vpn client endpoint
+# AWS vpn client endpoint with SAML authentication
 resource "aws_ec2_client_vpn_endpoint" "vpn-client" {
   description            = "${var.project-name}-${var.environment}-vpn-client"
   server_certificate_arn = aws_acm_certificate.server.arn
@@ -9,8 +9,9 @@ resource "aws_ec2_client_vpn_endpoint" "vpn-client" {
 
   split_tunnel = var.split_tunnel
   authentication_options {
-    type                       = "certificate-authentication"
-    root_certificate_chain_arn = aws_acm_certificate.client["root"].arn
+    type = "federated-authentication"
+    saml_provider_arn = aws_iam_saml_provider.google_workspace_saml_provider.arn
+    self_service_saml_provider_arn = aws_iam_saml_provider.google_workspace_saml_provider.arn
   }
   connection_log_options {
     enabled               = true
@@ -23,16 +24,45 @@ resource "aws_ec2_client_vpn_endpoint" "vpn-client" {
     Environment = "${var.environment}"
   }
 }
-resource "aws_ec2_client_vpn_network_association" "vpn-client" {
-  client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.vpn-client.id
-  subnet_id              = var.subnet_id
+
+# Example SAML provider resource
+resource "aws_iam_saml_provider" "google_workspace_saml_provider" {
+  name                   = "GoogleWorkspaceSAMLProvider"
+  saml_metadata_document = file("path/to/google_workspace_saml_metadata.xml")
 }
-resource "aws_ec2_client_vpn_authorization_rule" "vpn-client" {
-  client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.vpn-client.id
-  target_network_cidr    = "0.0.0.0/0"
-  authorize_all_groups   = true
-  depends_on = [
-    aws_ec2_client_vpn_endpoint.vpn-client,
-    aws_ec2_client_vpn_network_association.vpn-client
-  ]
+
+# Example IAM role for SAML authentication
+resource "aws_iam_role" "saml_role" {
+  name               = "GoogleWorkspaceSAMLRole"
+  assume_role_policy = data.aws_iam_policy_document.saml_assume_role_policy.json
+}
+
+# Example IAM policy for the role
+resource "aws_iam_policy" "saml_policy" {
+  name        = "GoogleWorkspaceSAMLVPNPolicy"
+  description = "Policy for SAML VPN access"
+  policy      = data.aws_iam_policy_document.saml_policy.json
+}
+
+data "aws_iam_policy_document" "saml_assume_role_policy" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithSAML"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_saml_provider.google_workspace_saml_provider.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "SAML:aud"
+      values   = ["https://signin.aws.amazon.com/saml"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "saml_policy" {
+  statement {
+    actions   = ["ec2:DescribeInstances"]
+    resources = ["*"]
+  }
 }
